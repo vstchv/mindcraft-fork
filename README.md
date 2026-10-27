@@ -1,3 +1,59 @@
+# This fork: local voice and gameplay additions
+
+> **Fork-specific documentation.** This section describes the additions in this repository. The original Mindcraft README starts below the divider.
+
+## What we added
+
+- **Local spoken replies:** Kokoro text-to-speech runs on the CPU and plays Andy's replies through your desktop speakers. Speech is split into short phrases, and stale queued replies are discarded when a new reply arrives.
+- **Push-to-talk:** a local browser microphone panel transcribes English speech with Whisper and sends it to Andy. Hold **F8** on Windows or use the panel's push-to-talk button.
+- **Local configuration:** `.env` holds your LM Studio endpoint and Minecraft player name; `.env.example` contains shareable placeholders. Local `.env` files and downloaded model caches are ignored by Git.
+- **Fishing:** the `!fish()` command looks for nearby exposed water, checks for a clear casting direction away from players, casts once, waits up to 45 seconds for a bite, and checks inventory before reporting a catch.
+- **Conversation and action changes:** Andy's profile emphasizes the latest player request, avoids continuing old goals, and reports unconfirmed or failed actions. Fishing rods are blocked from generic `!useOn` use to avoid hooking players.
+
+## Set up this fork
+
+1. Use **Node.js 22 LTS** for this fork; automatic `.env` loading uses Node's built-in `loadEnvFile`. Install **FFmpeg**, with both `ffmpeg` (microphone audio conversion) and `ffplay` (speech playback) available on your `PATH`.
+2. Run `npm install` from the repository folder.
+3. Copy `.env.example` to `.env` and edit the local values:
+
+   ```dotenv
+   LM_STUDIO_URL=http://localhost:1234/v1
+   MINECRAFT_PLAYER=YourMinecraftName
+   ```
+
+   Set `LM_STUDIO_URL` to your LM Studio server's OpenAI-compatible endpoint, including `/v1`. Use your exact in-game name for `MINECRAFT_PLAYER`. Keep personal values in `.env`.
+4. Start the LM Studio server and load the chat and embedding models named in `andy.json`. The included profile uses `qwen/qwen3.5-9b` and `text-embedding-nomic-embed-text-v1.5`; adjust these names to match your installed models. Both use `LM_STUDIO_URL` unless an explicit profile URL is supplied. This local setup needs no paid API key.
+5. Start Minecraft Java Edition, open your world to LAN, and match `host`, `port`, and `auth` in `settings.js` to your server. The included configuration uses localhost port `55916` with offline authentication.
+6. Start Andy:
+
+   ```sh
+   npm start
+   ```
+
+## Talk to Andy
+
+Spoken replies are enabled by `speak: true` in `settings.js`. Select a Kokoro voice through `speak_model` in `andy.json`, for example `kokoro/kokoro-82m/am_fenrir`. Audio plays on the machine running Mindcraft. The first use downloads the model and voice into `.cache/kokoro/`; allow extra startup time and an internet connection for the download. See [local voice configuration](docs/local-voice.md) for voice options and playback troubleshooting.
+
+For microphone input, leave Mindcraft running and open a second terminal:
+
+```sh
+npm run voice
+```
+
+Wait for Whisper to load, then open [the microphone panel](http://localhost:8082), click **Enable microphone**, and allow browser microphone access. Hold **F8** while speaking, then release to send; the global shortcut is Windows-only, and the panel button is also available. Andy must be connected to the Minecraft world. Check the displayed transcript if recognition is inaccurate, and use headphones to avoid feedback.
+
+The microphone service listens on loopback only. Whisper downloads its English model to `.cache/whisper/` on first launch and transcribes locally. Disable the microphone in the panel or press **Ctrl+C** in its terminal to stop it. For agent/port configuration and microphone troubleshooting, see [push-to-talk setup](docs/voice-chat.md).
+
+## Use fishing
+
+Give Andy a `fishing_rod`, stand near exposed water, and ask him to fish, or send `!fish()` through the normal in-game command flow. Each call makes one attempt. If no suitable bank or safe casting direction is found, Andy reports that no cast was made. A bite alone is not reported as a confirmed catch without an inventory gain.
+
+The command is registered in `src/agent/commands/actions.js`, the public gameplay skill is `fish(bot)` in `src/agent/library/skills.js`, and casting/waiting helpers live in `src/agent/library/fishing.js`.
+
+---
+
+# Original Mindcraft README
+
 <h1 align="center">🧠mindcraft⛏️</h1>
 <h1 align="center">
   <a href="https://trendshift.io/repositories/14816" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14816" alt="mindcraft-bots%2Fmindcraft | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
