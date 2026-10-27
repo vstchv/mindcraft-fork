@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+    <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Talk to Andy</title>
+    <style>
+        body {
+            font: 17px system-ui;
+            background: #14201c;
+            color: #eff8f1;
+            max-width: 650px;
+            margin: 60px auto;
+            padding: 24px;
+        }
+        h1 {
+            font-size: 36px;
+        }
+        button,
+        select {
+            font: inherit;
+            padding: 12px;
+            border-radius: 9px;
+            border: 1px solid #6a8b78;
+            margin: 6px 0;
+            background: #243c30;
+            color: inherit;
+        }
+        button {
+            cursor: pointer;
+        }
+        #talk {
+            display: block;
+            width: 100%;
+            padding: 28px;
+            background: #326e48;
+            font-weight: bold;
+        }
+        #talk.recording {
+            background: #ad423b;
+        }
+        small {
+            color: #b3c6b9;
+        }
+        #heard {
+            padding: 16px;
+            background: #203429;
+            min-height: 32px;
+            white-space: pre-wrap;
+        }
+        #status {
+            min-height: 48px;
+        }
+        label {
+            display: block;
+        }
+        select {
+            max-width: 100%;
+        }
+    </style>
+    <h1>Talk to Andy</h1>
+    <p>
+        Hold <strong>F8</strong>, speak, then release. Works while Minecraft has focus. Keep this
+        tab open.
+    </p>
+    <p>
+        <small
+            >Local Whisper transcription on this desktop. Andy replies through Fenrir. Use a headset
+            to avoid recording his voice.</small
+        >
+    </p>
+    <label for="devices">Microphone</label
+    ><select id="devices">
+        <option value="">Windows default microphone</option>
+    </select>
+    <div>
+        <button id="enable">Enable microphone</button>
+        <button id="disable" disabled>Disable</button>
+    </div>
+    <button id="talk" disabled>Hold F8 or hold this button to talk</button>
+    <p>
+        <label for="level">Microphone level</label
+        ><meter id="level" min="0" max="1" value="0" style="width: 100%"></meter
+        ><small id="micInfo"
+            >Enable the microphone to test its level. No message is sent until you hold the talk
+            button.</small
+        >
+    </p>
+    <p id="status">Microphone is off.</p>
+    <p id="identity"></p>
+    <small>Last message sent to Andy</small>
+    <p id="heard"></p>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const status = document.querySelector('#status');
+        const talk = document.querySelector('#talk');
+        const devices = document.querySelector('#devices');
+        let stream,
+            context,
+            capture,
+            source,
+            chunks = [],
+            stopTimer,
+            busy = false,
+            recording = false,
+            session = 0;
+        function wavAudio(parts, rate) {
+            const count = parts.reduce((n, p) => n + p.length, 0),
+                buffer = new ArrayBuffer(44 + count * 2),
+                v = new DataView(buffer);
+            const text = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+            text(0, 'RIFF');
+            v.setUint32(4, 36 + count * 2, true);
+            text(8, 'WAVE');
+            text(12, 'fmt ');
+            v.setUint32(16, 16, true);
+            v.setUint16(20, 1, true);
+            v.setUint16(22, 1, true);
+            v.setUint32(24, rate, true);
+            v.setUint32(28, rate * 2, true);
+            v.setUint16(32, 2, true);
+            v.setUint16(34, 16, true);
+            text(36, 'data');
+            v.setUint32(40, count * 2, true);
+            let o = 44;
+            for (const p of parts)
+                for (const sample of p) {
+                    const x = Math.max(-1, Math.min(1, sample));
+                    v.setInt16(o, Math.round(x * (x < 0 ? 32768 : 32767)), true);
+                    o += 2;
+                }
+            return buffer;
+        }
+        function stop() {
+            if (!recording) return;
+            recording = false;
+            busy = true;
+            clearTimeout(stopTimer);
+            talk.classList.remove('recording');
+            status.textContent = 'Transcribing locally…';
+            capture.port.postMessage('stop');
+        }
+        function disable() {
+            session++;
+            recording = false;
+            busy = false;
+            chunks = [];
+            clearTimeout(stopTimer);
+            if (capture) {
+                capture.port.onmessage = null;
+                capture.disconnect();
+                capture = null;
+            }
+            source?.disconnect();
+            source = null;
+            context?.close().catch(() => {});
+            context = null;
+            stream?.getTracks().forEach((track) => track.stop());
+            stream = null;
+            socket.emit('disable');
+            talk.disabled = true;
+            talk.classList.remove('recording');
+            document.querySelector('#enable').disabled = false;
+            document.querySelector('#disable').disabled = true;
+            devices.disabled = false;
+            status.textContent = 'Microphone is off.';
+            document.querySelector('#level').value = 0;
+            document.querySelector('#micInfo').textContent = 'Microphone is off.';
+        }
+        document.querySelector('#enable').onclick = async () => {
+            document.querySelector('#enable').disabled = true;
+            const current = ++session;
+            try {
+                context = new AudioContext();
+                await context.resume();
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        deviceId: devices.value ? { exact: devices.value } : undefined,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    },
+                });
+                if (current !== session) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    return;
+                }
+                await context.audioWorklet.addModule('/capture-worklet.js');
+                if (current !== session) return;
+                source = context.createMediaStreamSource(stream);
+                capture = new AudioWorkletNode(context, 'microphone-capture');
+                source.connect(capture);
+                capture.connect(context.destination);
+                capture.port.onmessage = ({ data }) => {
+                    if (current !== session) return;
+                    if (data.level !== undefined)
+                        document.querySelector('#level').value = Math.min(1, data.level * 10);
+                    if (data.samples) chunks.push(data.samples);
+                    if (!data.done) return;
+                    if (chunks.reduce((n, p) => n + p.length, 0) < context.sampleRate * 0.3) {
+                        chunks = [];
+                        busy = false;
+                        status.textContent =
+                            'Recording too short. Hold F8 while speaking, then release.';
+                        return;
+                    }
+                    const audio = wavAudio(chunks, context.sampleRate);
+                    chunks = [];
+                    socket.timeout(60000).emit('audio', audio, (error, result) => {
+                        if (current !== session) return;
+                        busy = false;
+                        if (error || result?.error) {
+                            status.textContent = result?.error || 'Transcription timed out.';
+                            return;
+                        }
+                        document.querySelector('#heard').textContent = result.text;
+                        status.textContent = 'Sent to Andy. Hold F8 for your next message.';
+                    });
+                };
+                const selected = stream.getAudioTracks()[0].getSettings().deviceId;
+                document.querySelector('#micInfo').textContent =
+                    'Active input: ' +
+                    stream.getAudioTracks()[0].label +
+                    '. Speak and check that the meter moves.';
+                const inputs = (await navigator.mediaDevices.enumerateDevices()).filter(
+                    (device) => device.kind === 'audioinput',
+                );
+                devices.replaceChildren();
+                for (const input of inputs)
+                    devices.add(new Option(input.label || 'Microphone', input.deviceId));
+                devices.value = selected;
+                devices.disabled = true;
+                socket.emit('enable');
+                talk.disabled = false;
+                document.querySelector('#enable').disabled = true;
+                document.querySelector('#disable').disabled = false;
+                status.textContent =
+                    'Ready. Hold F8 to speak; release to send. Microphone stays enabled until you click Disable.';
+            } catch (error) {
+                disable();
+                status.textContent = `Microphone unavailable: ${error.message}. Check Windows Sound → Input and browser microphone permission.`;
+            }
+        };
+        document.querySelector('#disable').onclick = disable;
+        function start() {
+            if (!stream || busy || recording || !capture) return;
+            if (context.state !== 'running') {
+                disable();
+                status.textContent = 'Audio paused. Enable microphone again.';
+                return;
+            }
+            chunks = [];
+            recording = true;
+            capture.port.postMessage('start');
+            talk.classList.add('recording');
+            status.textContent = 'Listening… release F8 to send.';
+            stopTimer = setTimeout(stop, 20000);
+        }
+        socket.on('ptt', (state) => (state === 'down' ? start() : stop()));
+        socket.on('identity', (value) => {
+            document.querySelector('#identity').textContent =
+                `Speaking as ${value.player} to ${value.agent}`;
+        });
+        socket.on('replaced', disable);
+        socket.on('disconnect', disable);
+        talk.onpointerdown = (event) => {
+            talk.setPointerCapture(event.pointerId);
+            start();
+        };
+        talk.onpointerup = stop;
+        talk.onpointercancel = stop;
+        window.addEventListener('beforeunload', disable);
+    </script>
+</html>

@@ -1,3 +1,4 @@
+import './env.js';
 import { readFileSync } from 'fs';
 
 let keys = {};

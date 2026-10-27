@@ -11,7 +11,7 @@ class MindServerProxy {
         if (MindServerProxy.instance) {
             return MindServerProxy.instance;
         }
-        
+
         this.socket = null;
         this.connected = false;
         this.agents = [];
@@ -20,7 +20,7 @@ class MindServerProxy {
 
     async connect(name, port) {
         if (this.connected) return;
-        
+
         this.name = name;
         this.socket = io(`http://localhost:${port}`);
 
@@ -60,9 +60,17 @@ class MindServerProxy {
             console.log(`Restarting agent: ${agentName}`);
             this.agent.cleanKill();
         });
-		
+
         this.socket.on('send-message', (data) => {
             try {
+                if (data.voice === true && typeof data.message === 'string') {
+                    // Echo through the bot; its own chat is ignored by respondFunc.
+                    const label = String(data.from)
+                        .replace(/[\r\n\u00a7]/g, ' ')
+                        .slice(0, 32);
+                    const text = data.message.replace(/[\r\n\u00a7]/g, ' ');
+                    this.agent.bot.chat(`[Voice] ${label}: ${text}`.slice(0, 240));
+                }
                 this.agent.respondFunc(data.from, data.message);
             } catch (error) {
                 console.error('Error: ', JSON.stringify(error, Object.getOwnPropertyNames(error)));
